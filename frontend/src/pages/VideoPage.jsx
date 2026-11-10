@@ -9,6 +9,8 @@ export default function VideoPage() {
   const [video, setVideo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isLiked, setIsLiked] = useState(false);
+  const [likeLoading, setLikeLoading] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -22,7 +24,7 @@ export default function VideoPage() {
         const parsedUser = stored ? JSON.parse(stored) : null;
         const accessToken = parsedUser?.accessToken;
 
-        // Uses relative path through Vite proxy to http://localhost:8000/api/v1/videos/:videoId
+
         const res = await fetch(`/api/v1/videos/${videoId}`, {
           signal: controller.signal,
           credentials: "include",
@@ -36,11 +38,7 @@ export default function VideoPage() {
         const data = await res.json();
         console.log("[VideoPage] Video fetched response:", data);
 
-        // Extract video data from possible response shapes:
-        // shape 1: { data: { video: { ... } } }
-        // shape 2: { data: { ...videoFields } }
-        // shape 3: { video: { ... } }
-        // shape 4: { ...videoFields }
+
         const videoData =
           data?.data?.video ||
           (data?.data && !Array.isArray(data.data) && data.data) ||
@@ -49,6 +47,10 @@ export default function VideoPage() {
 
         console.log("[VideoPage] Resolved videoData:", videoData);
         setVideo(videoData);
+
+        if (videoData?.isLiked !== undefined) {
+          setIsLiked(Boolean(videoData.isLiked));
+        }
       } catch (err) {
         if (err.name !== "AbortError") {
           setError(err.message || "Failed to load video");
@@ -65,7 +67,7 @@ export default function VideoPage() {
     return () => controller.abort();
   }, [videoId]);
 
-  // Resolve video file URL regardless of backend property casing (videoFile vs videofile vs url)
+
   const rawVideoSrc =
     video?.videoFile ||
     video?.videofile ||
@@ -73,13 +75,13 @@ export default function VideoPage() {
     video?.videoUrl ||
     video?.url;
 
-  // Resolve thumbnail URL
+
   const rawThumbnailSrc =
     video?.thumbnail ||
     video?.thumbnailUrl ||
     video?.thumb;
 
-  // Format media URL if backend returned a relative file path instead of a full URL (e.g. Cloudinary)
+
   const formatMediaUrl = (url) => {
     if (!url) return "";
     if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("blob:")) {
@@ -91,6 +93,49 @@ export default function VideoPage() {
 
   const videoSrc = formatMediaUrl(rawVideoSrc);
   const thumbnailSrc = formatMediaUrl(rawThumbnailSrc);
+
+  const handleToggleLike = async () => {
+    if (likeLoading || !videoId) return;
+
+    const stored = localStorage.getItem("videotb_user");
+    const parsedUser = stored ? JSON.parse(stored) : null;
+    const accessToken = parsedUser?.accessToken;
+
+    setLikeLoading(true);
+    try {
+      // Hits http://localhost:8000/api/v1/likes/toggle/v/:videoId (via Vite proxy)
+      const res = await fetch(`/api/v1/likes/toggle/v/${videoId}`, {
+        method: "POST",
+        credentials: "include",
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to toggle like (${res.status}: ${res.statusText})`);
+      }
+
+      const data = await res.json();
+      console.log("[VideoPage] Like toggled response:", data);
+
+      // Check if backend returned explicit isLiked status or message, otherwise toggle locally
+      let nextLiked;
+      if (typeof data?.data?.isLiked === "boolean") {
+        nextLiked = data.data.isLiked;
+      } else if (typeof data?.isLiked === "boolean") {
+        nextLiked = data.isLiked;
+      } else if (typeof data?.message === "string") {
+        nextLiked = !data.message.toLowerCase().includes("unlike");
+      } else {
+        nextLiked = !isLiked;
+      }
+
+      setIsLiked(nextLiked);
+    } catch (err) {
+      console.error("[VideoPage] Error toggling like:", err);
+    } finally {
+      setLikeLoading(false);
+    }
+  };
 
   return (
     <>
@@ -123,7 +168,7 @@ export default function VideoPage() {
 
           {!loading && !error && video && (
             <div className="flex flex-col gap-5">
-              {/* Video Player */}
+
               <div className="w-full aspect-video bg-black rounded-2xl overflow-hidden shadow-2xl border border-white/[0.08]">
                 {videoSrc ? (
                   <video
@@ -147,19 +192,44 @@ export default function VideoPage() {
                 )}
               </div>
 
-              {/* Video Title */}
+
               <h1 className="text-xl md:text-2xl font-bold text-white tracking-tight leading-snug">
                 {video.title}
               </h1>
 
-              {/* Video Meta (Date) */}
+
               {video.createdAt && (
                 <div className="flex items-center gap-2 text-xs text-zinc-400 pb-4 border-b border-white/[0.08]">
                   <span>{new Date(video.createdAt).toLocaleDateString()}</span>
                 </div>
               )}
 
-              {/* Description Box */}
+              {/* Like Button Row - just above the description */}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleToggleLike}
+                  disabled={likeLoading}
+                  aria-label={isLiked ? "Unlike video" : "Like video"}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isLiked
+                      ? "bg-red-600 text-white shadow-lg shadow-red-600/30 hover:bg-red-500"
+                      : "bg-[#18181c] text-zinc-300 border border-white/[0.1] hover:bg-[#222228] hover:text-white hover:border-white/20"
+                  }`}
+                >
+                  {isLiked ? (
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4" aria-hidden="true">
+                      <path d="M2 20h2c.55 0 1-.45 1-1v-9c0-.55-.45-1-1-1H2v11zm19.83-7.12c.11-.25.17-.52.17-.8 0-1.1-.9-2-2-2h-5.5l.92-4.65c.05-.22.02-.46-.08-.66-.23-.45-.52-.86-.88-1.22L14 3.12 7.59 9.53C7.22 9.9 7 10.42 7 10.97V19c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-.12z" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" aria-hidden="true">
+                      <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+                    </svg>
+                  )}
+                  <span>{isLiked ? "Liked" : "Like"}</span>
+                </button>
+              </div>
+
               {video.description && (
                 <div className="bg-[#18181c] border border-white/[0.07] rounded-xl p-4 text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
                   <p className="font-semibold text-white mb-1.5 text-xs uppercase tracking-wider text-zinc-400">
@@ -169,7 +239,7 @@ export default function VideoPage() {
                 </div>
               )}
 
-              {/* Comments Section */}
+
               <Comments videoId={videoId} />
             </div>
           )}
